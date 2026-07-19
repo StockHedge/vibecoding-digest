@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-main.py — 커뮤니티 인기 글 수집·보고 파이프라인 오케스트레이션.
+main.py — 커뮤니티 인기 글 수집·요약·PDF·게시 파이프라인 오케스트레이션.
 
 3일(72시간)마다 실행되어 communities.json에 정의된 커뮤니티들의 최근 72시간
-인기 글을 수집하고, 한국어 보고문을 조립해 카카오톡 "나에게 보내기"로 전송한다.
+인기 글을 수집하고, 각 글의 본문을 확보해 Gemini로 한글 번역·요약한 뒤 PDF
+문서로 묶어 git 저장소(reports/)에 커밋·푸시하고, 카카오톡 "나에게 보내기"로는
+헤더·하이라이트·PDF 링크만 담은 짧은 메시지를 전송한다.
+
+파이프라인: collect → (top_n 슬라이스) → fetch_content → summarize → make_pdf
+           → publish(git commit·push) → kakao 전송
 
 사용:
-  py -3 main.py              # 실제 전송(access token 갱신 필요 — kakao_auth.py로 사전 인증)
-  py -3 main.py --dry-run    # 전송 대신 보고문을 stdout에 출력(테스트용)
+  py -3 main.py                # 실제 전송(access token 갱신 필요 — kakao_auth.py로 사전 인증)
+  py -3 main.py --dry-run      # 수집·요약·PDF 생성까지 실행하되 push·카카오 전송은 생략
+  py -3 main.py --legacy-text  # 개편 이전의 "조각 텍스트 나열 전송" 경로(호환용, PDF·게시 없음)
 
 종료 코드:
-  0 — 성공. 일부 커뮤니티 수집 실패는 보고문 [수집 실패] 섹션에 명시되며 0으로 취급.
+  0 — 성공. 일부 커뮤니티 수집 실패/글 요약 실패는 PDF·보고문에 명시되며 0으로 취급.
   1 — 카카오 전송 자체가 실패한 경우(--dry-run에서는 전송을 하지 않으므로 발생하지 않음).
 """
 from __future__ import annotations
@@ -25,7 +31,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import collect
+import fetch_content
+import make_pdf
+import publish
 import report
+import summarize
 from kakao_sender import DEFAULT_ENV_PATH, is_rotation_pending, send_to_me
 
 logger = logging.getLogger("main")
@@ -77,7 +87,48 @@ def load_communities(path: str = COMMUNITIES_PATH) -> list:
     return data
 
 
-def run(dry_run: bool, env_path: str = DEFAULT_ENV_PATH,
+def _slice_top_n(results: list, communities: list) -> None:
+    """report.py와 동일한 top_n 규칙으로 각 커뮤니티 결과의 posts를 잘라낸다(in-place).
+
+    이후 단계(fetch_content의 본문 확보, summarize의 Gemini 호출)가 실제로 PDF에
+    실릴 글에만 비용을 쓰도록, 수집 직후·본문 확보/요약 이전에 자른다.
+    """
+    top_n_map = report._top_n_by_id(communities)
+    for r in results:
+        if r.get("error"):
+            continue
+        top_n = top_n_map.get(r["community_id"], report.DEFAULT_TOP_N)
+        r["posts"] = r["posts"][:top_n]
+
+
+def _build_kakao_text(window_start: datetime, window_end: datetime, results: list,
+                      highlight, pdf_path: Path, publish_result: dict) -> str:
+    """카카오 전송용 짧은 메시지(헤더+하이라이트+PDF 링크, 1~2조각 내)를 조립한다."""
+    ok_results = [r for r in results if not r.get("error")]
+    total_posts = sum(len(r["posts"]) for r in ok_results)
+    total_summarized = sum(
+        1 for r in ok_results for p in r["posts"] if not p.get("summary_failed")
+    )
+
+    ws = window_start.astimezone(collect.KST).strftime("%m/%d")
+    we = window_end.astimezone(collect.KST).strftime("%m/%d")
+
+    lines = [
+        f"커뮤니티 다이제스트 ({ws}~{we})",
+        f"총 {total_posts}건 · 요약 {total_summarized}건",
+    ]
+    if highlight:
+        lines.append(f"★ {highlight['translated_title']} — {highlight['reason']}")
+
+    link = publish_result.get("link")
+    if link:
+        lines.append(f"PDF: {link}")
+    else:
+        lines.append(f"PDF(로컬 생성, {publish_result.get('message', '게시 실패')}): {pdf_path}")
+    return "\n".join(lines)
+
+
+def run(dry_run: bool, legacy_text: bool, env_path: str = DEFAULT_ENV_PATH,
         communities_path: str = COMMUNITIES_PATH) -> int:
     window_end = datetime.now(timezone.utc)
     window_start = window_end - timedelta(hours=collect.WINDOW_HOURS)
@@ -91,19 +142,45 @@ def run(dry_run: bool, env_path: str = DEFAULT_ENV_PATH,
             "커뮤니티 인기 글 다이제스트\n\n"
             f"설정 로드 실패로 수집을 진행하지 못했습니다: {e}\n"
         )
-        return _deliver(text, dry_run, env_path)
+        return _deliver_text(text, dry_run, env_path)
 
     results = collect.collect_all(communities, env_path=env_path)
-    text = report.build_report(results, communities, window_start, window_end)
 
     ok = sum(1 for r in results if not r.get("error"))
     fail = sum(1 for r in results if r.get("error"))
     logger.info("수집 완료: 성공 %d / 실패 %d (전체 %d)", ok, fail, len(results))
 
-    return _deliver(text, dry_run, env_path)
+    if legacy_text:
+        # 개편 이전 경로: 요약·PDF·게시 없이 조각 텍스트 보고문을 그대로 전송(호환용).
+        text = report.build_report(results, communities, window_start, window_end)
+        return _deliver_text(text, dry_run, env_path)
+
+    _slice_top_n(results, communities)
+    fetch_content.fetch_content_for_results(results, communities)
+    highlight = summarize.summarize_all(results, env_path=env_path)
+
+    pdf_path = make_pdf.build_pdf(results, communities, window_start, window_end)
+    logger.info("PDF 생성 완료: %s", pdf_path)
+
+    if dry_run:
+        print(f"[dry-run] PDF 생성 완료: {pdf_path}")
+        if highlight:
+            print(f"[dry-run] 하이라이트: {highlight['translated_title']} — {highlight['reason']}")
+        else:
+            print("[dry-run] 하이라이트 없음(요약 성공한 글 없음)")
+        logger.info("dry-run 모드: git 게시·카카오 전송 생략")
+        return 0
+
+    publish_result = publish.publish_pdf(pdf_path)
+    logger.info("게시 결과: %s (committed=%s pushed=%s)",
+               publish_result["message"], publish_result["committed"], publish_result["pushed"])
+
+    kakao_text = _build_kakao_text(window_start, window_end, results, highlight,
+                                   pdf_path, publish_result)
+    return _deliver_text(kakao_text, dry_run=False, env_path=env_path)
 
 
-def _deliver(text: str, dry_run: bool, env_path: str) -> int:
+def _deliver_text(text: str, dry_run: bool, env_path: str) -> int:
     """dry-run이면 stdout 출력, 아니면 카카오 전송. 전 커뮤니티 실패여도 항상 전송 시도."""
     if dry_run:
         print(text)
@@ -128,9 +205,11 @@ def _deliver(text: str, dry_run: bool, env_path: str) -> int:
 
 
 def _main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="커뮤니티 인기 글 수집·보고 파이프라인")
+    parser = argparse.ArgumentParser(description="커뮤니티 인기 글 수집·요약·PDF·게시 파이프라인")
     parser.add_argument("--dry-run", action="store_true",
-                        help="전송 대신 보고문을 stdout에 출력")
+                        help="수집·요약·PDF 생성까지 실행하되 push·카카오 전송은 생략")
+    parser.add_argument("--legacy-text", action="store_true",
+                        help="개편 이전의 조각 텍스트 나열 전송 경로(호환용, PDF·게시 없음)")
     parser.add_argument("--env", default=DEFAULT_ENV_PATH, help=".env 경로 (기본 .env)")
     parser.add_argument("--communities", default=COMMUNITIES_PATH,
                         help="커뮤니티 설정 JSON 경로 (기본 communities.json)")
@@ -147,7 +226,7 @@ def _main(argv=None) -> int:
 
     _setup_logging()
     try:
-        return run(dry_run=args.dry_run, env_path=args.env,
+        return run(dry_run=args.dry_run, legacy_text=args.legacy_text, env_path=args.env,
                    communities_path=args.communities)
     except Exception as e:  # noqa: BLE001 - CLI 최상위 경계
         logger.exception("예기치 못한 오류: %s", e)

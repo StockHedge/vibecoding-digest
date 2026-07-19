@@ -13,6 +13,8 @@ jobs:
   digest:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write   # reports/ PDF 커밋·푸시용
     steps:
       - name: 3일 주기 게이트
         id: gate
@@ -34,9 +36,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: 다이제스트 수집·전송
+      - name: 의존성 설치
+        if: steps.gate.outputs.run == 'true'
+        run: pip install -r requirements.txt
+
+      - name: 다이제스트 수집·요약·PDF·전송
         if: steps.gate.outputs.run == 'true'
         env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
           KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
           KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
