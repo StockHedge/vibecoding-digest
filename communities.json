@@ -1,0 +1,94 @@
+[
+  {
+    "id": "reddit_claudecode",
+    "name": "r/ClaudeCode",
+    "type": "reddit",
+    "params": {
+      "subreddit": "ClaudeCode",
+      "limit": 50
+    },
+    "top_n": 3,
+    "enabled": true,
+    "_comment": "Claude Code 전용 서브레딧 — 실시간 이슈 반응 최상위 (리서치 2026-07-18 확정)"
+  },
+  {
+    "id": "reddit_claudeai",
+    "name": "r/ClaudeAI",
+    "type": "reddit",
+    "params": {
+      "subreddit": "ClaudeAI",
+      "limit": 50
+    },
+    "top_n": 3,
+    "enabled": true,
+    "_comment": "Claude 전반 최대 서브레딧, megathread 운영·분 단위 회전"
+  },
+  {
+    "id": "reddit_vibecoding",
+    "name": "r/vibecoding",
+    "type": "reddit",
+    "params": {
+      "subreddit": "vibecoding",
+      "limit": 50
+    },
+    "top_n": 3,
+    "enabled": true,
+    "_comment": "바이브 코딩 실천자 문화 중심 서브레딧"
+  },
+  {
+    "id": "hn_claude_code",
+    "name": "Hacker News (Claude Code)",
+    "type": "hn_algolia",
+    "params": {
+      "query": "Claude Code"
+    },
+    "top_n": 3,
+    "enabled": true,
+    "_comment": "HN은 상주 커뮤니티가 아닌 간헐적 대형 노출 채널 — 쿼리 기반 수집"
+  },
+  {
+    "id": "hn_vibecoding",
+    "name": "Hacker News (vibe coding)",
+    "type": "hn_algolia",
+    "params": {
+      "query": "vibe coding"
+    },
+    "top_n": 3,
+    "enabled": true,
+    "_comment": "바이브 코딩 담론(옹호·비판 양쪽) 포착용 쿼리"
+  },
+  {
+    "id": "lobsters_vibecoding",
+    "name": "Lobsters (vibecoding 태그)",
+    "type": "rss",
+    "params": {
+      "feed_url": "https://lobste.rs/t/vibecoding.rss"
+    },
+    "top_n": 3,
+    "enabled": true,
+    "_comment": "진입장벽 있는 니치 고신호 채널 — 전용 태그 실존 확인됨"
+  },
+  {
+    "id": "geeknews",
+    "name": "긱뉴스 (GeekNews)",
+    "type": "rss",
+    "params": {
+      "feed_url": "https://news.hada.io/rss/news"
+    },
+    "top_n": 3,
+    "enabled": true,
+    "_comment": "국내 유일의 개방형 수집 가능 채널 (Weekly 구독 약 1.8만). 피드는 최신순이라 72시간 창 내 게시순 상위를 보고"
+  },
+  {
+    "id": "dcinside_chatgpt",
+    "name": "디시인사이드 (예시 갤러리)",
+    "type": "dcinside",
+    "params": {
+      "gallery_id": "chatgpt",
+      "board_type": "mgallery"
+    },
+    "top_n": 3,
+    "enabled": false,
+    "_comment": "수집기는 구현돼 있으나 리서치 결과 바이브 코딩 논의 밀도 미달로 비활성 (프로그래밍 갤러리: 밀도 낮음, ChatGPT 갤러리: 주제 무관). 필요 시 gallery_id 교체 후 enabled=true"
+  }
+]
