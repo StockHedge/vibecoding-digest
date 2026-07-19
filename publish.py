@@ -8,9 +8,13 @@ publish.py — 생성된 다이제스트 PDF를 git commit·push하고 카카오
   2. origin이 설정돼 있으면 git push, 없으면 커밋만 하고 반환값에 "푸시 스킵" 표시.
   3. GITHUB_ACTIONS=true 환경(리포지토리에 커밋 identity가 없는 러너)에서는 커밋 전
      git config user.name/user.email을 github-actions[bot]로 로컬(repo 한정) 설정한다.
-  4. 카카오용 링크: origin URL(https/ssh 모두 처리)에서 owner/repo를 파싱해
-     https://github.com/<owner>/<repo>/blob/main/reports/<파일명> 형태로 만든다
-     (브랜치는 main으로 고정 — 이 파이프라인은 main에 직접 push하는 것을 전제).
+  4. 카카오용 링크: origin URL(https/ssh 모두 처리)에서 owner/repo를 파싱하고,
+     `git rev-parse --abbrev-ref HEAD`로 읽은 현재 브랜치를 그대로 사용해
+     https://github.com/<owner>/<repo>/blob/<브랜치>/reports/<파일명> 형태로 만든다
+     (브랜치를 하드코딩하지 않는다 — 저장소 기본 브랜치가 main이 아닐 수 있음
+     [실측: vibecoding-digest 저장소는 master]. detached HEAD(브랜치명이 아닌
+     "HEAD" 자체가 반환되는 경우)에서는 어느 브랜치를 가리켜야 할지 알 수 없으므로
+     링크를 생략한다).
 
 git 자체가 실패해도(커밋할 변경 없음/네트워크 오류 등) 예외를 던지지 않고 결과
 dict에 사유를 담아 반환한다 — main.py가 이를 보고 카카오 메시지의 링크 문구를
@@ -31,7 +35,6 @@ logger = logging.getLogger("publish")
 
 GIT_TIMEOUT = 30    # 초 (add/commit/remote 등 로컬 조회성 명령)
 PUSH_TIMEOUT = 60   # 초 (네트워크를 타는 push)
-GITHUB_BLOB_BRANCH = "main"
 
 _REMOTE_URL_RE = re.compile(
     r"^(?:https?://(?:[^@/]+@)?github\.com/|git@github\.com:)"
@@ -49,6 +52,7 @@ def _run_git(args: list, cwd: str, timeout: float = GIT_TIMEOUT) -> subprocess.C
     try:
         return subprocess.run(
             ["git", *args], cwd=cwd, text=True, capture_output=True, timeout=timeout,
+            encoding="utf-8", errors="replace",  # Windows 콘솔 cp949 기본값이 git UTF-8 출력을 못 읽음
         )
     except (FileNotFoundError, OSError, subprocess.SubprocessError) as e:
         return subprocess.CompletedProcess(args, returncode=1, stdout="", stderr=str(e))
@@ -69,6 +73,17 @@ def _parse_owner_repo(remote_url: str) -> Optional[tuple]:
     if not m:
         return None
     return m.group("owner"), m.group("repo")
+
+
+def _current_branch(repo_dir: str) -> Optional[str]:
+    """현재 브랜치명. detached HEAD("HEAD" 문자열 반환)나 조회 실패 시 None."""
+    proc = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], repo_dir)
+    if proc.returncode != 0:
+        return None
+    branch = proc.stdout.strip()
+    if not branch or branch == "HEAD":
+        return None
+    return branch
 
 
 def publish_pdf(pdf_path, repo_dir: str = ".") -> dict:
@@ -119,15 +134,18 @@ def publish_pdf(pdf_path, repo_dir: str = ".") -> dict:
     logger.info("git push 완료")
 
     owner_repo = _parse_owner_repo(remote_url)
+    branch = _current_branch(repo_dir)
     link = None
-    if owner_repo:
+    if owner_repo and branch:
         owner, repo = owner_repo
         link = (
-            f"https://github.com/{owner}/{repo}/blob/{GITHUB_BLOB_BRANCH}/"
+            f"https://github.com/{owner}/{repo}/blob/{branch}/"
             f"{rel_path.replace(os.sep, '/')}"
         )
-    else:
+    elif not owner_repo:
         logger.warning("origin URL에서 owner/repo 파싱 실패(github.com 형식이 아님) — 링크 생략")
+    else:
+        logger.warning("현재 브랜치를 특정할 수 없음(detached HEAD 등) — 링크 생략")
 
     return {"committed": committed, "pushed": True, "link": link, "message": "게시 완료"}
 
