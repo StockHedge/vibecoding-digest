@@ -29,14 +29,21 @@ import logging.handlers
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 import collect
 import fetch_content
+import gdrive
 import make_pdf
 import publish
 import report
 import summarize
-from kakao_sender import DEFAULT_ENV_PATH, is_rotation_pending, send_to_me
+from kakao_sender import (
+    DEFAULT_ENV_PATH,
+    TEXT_TEMPLATE_MAX,
+    is_rotation_pending,
+    send_to_me,
+)
 
 logger = logging.getLogger("main")
 
@@ -101,9 +108,36 @@ def _slice_top_n(results: list, communities: list) -> None:
         r["posts"] = r["posts"][:top_n]
 
 
+def _fit_highlight(highlight: dict, budget: int) -> str:
+    """'★ 제목 — 요약'을 budget(글자) 안에 맞춰 축약. 예산이 너무 작으면 빈 문자열.
+
+    상세 요약은 PDF에 전부 실리므로, 카카오 본문의 하이라이트는 제목을 우선 보존하고
+    남는 만큼만 요약(reason)을 덧붙여 200자 단일 전송을 보장한다.
+    """
+    star = "★ "
+    if budget <= len(star) + 4:
+        return ""
+    title = " ".join((highlight.get("translated_title") or "").split())
+    reason = " ".join((highlight.get("reason") or "").split())
+    base = star + title
+    if len(base) >= budget:
+        return base[:budget - 1] + "…"
+    sep = " — "
+    room = budget - len(base) - len(sep)
+    if reason and room > 8:
+        r = reason if len(reason) <= room else reason[:room - 1] + "…"
+        return base + sep + r
+    return base
+
+
 def _build_kakao_text(window_start: datetime, window_end: datetime, results: list,
-                      highlight, pdf_path: Path, publish_result: dict) -> str:
-    """카카오 전송용 짧은 메시지(헤더+하이라이트+PDF 링크, 1~2조각 내)를 조립한다."""
+                      highlight, pdf_path: Path, link: Optional[str],
+                      publish_message: str) -> str:
+    """카카오 전송용 짧은 메시지(헤더+하이라이트+PDF 링크)를 200자 이내 한 통으로 조립한다.
+
+    헤더·링크를 먼저 확보하고 남는 예산에 하이라이트를 축약해 넣으므로, kakao_sender의
+    분할(200자 초과 시 (i/N) 조각화)이 발동하지 않고 단일 메시지로 전송된다.
+    """
     ok_results = [r for r in results if not r.get("error")]
     total_posts = sum(len(r["posts"]) for r in ok_results)
     total_summarized = sum(
@@ -113,18 +147,19 @@ def _build_kakao_text(window_start: datetime, window_end: datetime, results: lis
     ws = window_start.astimezone(collect.KST).strftime("%m/%d")
     we = window_end.astimezone(collect.KST).strftime("%m/%d")
 
-    lines = [
+    header = [
         f"커뮤니티 다이제스트 ({ws}~{we})",
         f"총 {total_posts}건 · 요약 {total_summarized}건",
     ]
-    if highlight:
-        lines.append(f"★ {highlight['translated_title']} — {highlight['reason']}")
-
-    link = publish_result.get("link")
     if link:
-        lines.append(f"PDF: {link}")
+        link_line = f"PDF: {link}"
     else:
-        lines.append(f"PDF(로컬 생성, {publish_result.get('message', '게시 실패')}): {pdf_path}")
+        link_line = f"PDF(로컬 생성, {publish_message}): {pdf_path}"
+
+    # 고정부(헤더+링크)를 먼저 두고, 남는 예산으로 하이라이트를 축약한다.
+    fixed_len = len("\n".join(header + [link_line]))
+    hl = _fit_highlight(highlight, TEXT_TEMPLATE_MAX - fixed_len - 1) if highlight else ""
+    lines = header + ([hl] if hl else []) + [link_line]
     return "\n".join(lines)
 
 
@@ -171,12 +206,23 @@ def run(dry_run: bool, legacy_text: bool, env_path: str = DEFAULT_ENV_PATH,
         logger.info("dry-run 모드: git 게시·카카오 전송 생략")
         return 0
 
+    # Drive 공개 업로드(카카오 링크용). 실패해도 예외 없이 link=None을 반환하므로
+    # 아래에서 GitHub 링크로 자연 폴백한다.
+    drive_result = gdrive.publish_to_drive(pdf_path, env_path=env_path)
+    if drive_result.get("link"):
+        logger.info("Drive 공개 업로드 완료 — 카카오 링크로 사용")
+    else:
+        logger.warning("Drive 링크 미사용(%s) — GitHub 링크로 폴백", drive_result.get("message"))
+
+    # git 아카이브: 링크 목적이 아니라 reports/ 이력 보존 목적으로 유지한다.
     publish_result = publish.publish_pdf(pdf_path)
     logger.info("게시 결과: %s (committed=%s pushed=%s)",
                publish_result["message"], publish_result["committed"], publish_result["pushed"])
 
+    # 링크 우선순위: Drive 공개 링크 > GitHub blob 링크 > (둘 다 실패 시) 로컬 경로 문구.
+    link = drive_result.get("link") or publish_result.get("link")
     kakao_text = _build_kakao_text(window_start, window_end, results, highlight,
-                                   pdf_path, publish_result)
+                                   pdf_path, link, publish_result.get("message", ""))
     return _deliver_text(kakao_text, dry_run=False, env_path=env_path)
 
 
