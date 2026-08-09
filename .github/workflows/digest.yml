@@ -55,5 +55,9 @@ jobs:
           GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
           GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
           GDRIVE_FOLDER_ID: ${{ vars.GDRIVE_FOLDER_ID }}
+          # for-marketing 허브 push(IG 카드뉴스 원재료). 둘 다 없으면 hub_sender가
+          # 조용히 생략하므로, 미설정이어도 다이제스트 발송 자체는 정상 동작한다.
+          HUB_BASE_URL: ${{ vars.HUB_BASE_URL }}
+          HUB_INGEST_SECRET: ${{ secrets.HUB_INGEST_SECRET }}
           PYTHONIOENCODING: utf-8
         run: python main.py

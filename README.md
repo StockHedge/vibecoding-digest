@@ -8,7 +8,8 @@
 - 워크플로: `.github/workflows/digest.yml` — 매일 00:00 UTC(=09:00 KST) 트리거 +
   epoch-day % 3 게이트로 정확한 3일 주기 (기준 정렬: 2026-07-21부터)
 - 시크릿: GitHub repo Secrets (`KAKAO_REST_API_KEY` / `KAKAO_CLIENT_SECRET` /
-  `KAKAO_REFRESH_TOKEN` / `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` / `ADMIN_TOKEN`(선택))
+  `KAKAO_REFRESH_TOKEN` / `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` / `ADMIN_TOKEN`(선택) /
+  `HUB_INGEST_SECRET`(선택)) + Variables (`HUB_BASE_URL`(선택))
 - 토큰 회전: 러너에서 새 refresh token 수신 시 `ADMIN_TOKEN`(PAT)이 있으면 Secret 자동
   갱신, 없으면 카카오로 수동 갱신 안내 발송
 - 수동 실행(로컬): `py -3 main.py` (전송 포함) / `py -3 main.py --dry-run` (전송 없이 확인)
@@ -26,6 +27,7 @@
 | `main.py` | 오케스트레이션 (수집→보고→전송) |
 | `kakao_sender.py` | 카카오 "나에게 보내기" (200자 분할, refresh token 자동 회전) |
 | `kakao_auth.py` | OAuth 재인증 CLI (`invalid_grant` 시 1회 실행) |
+| `hub_sender.py` | for-marketing 허브로 다이제스트 push — IG 카드뉴스 원재료 (fail-soft) |
 | `KAKAO_SETUP.md` | 카카오 콘솔 설정 체크리스트 |
 
 ## 수집 대상 (2026-07-18 딥리서치로 확정)
@@ -44,3 +46,15 @@ X(무료 API 없음), Discord(ToS 스크래핑 금지), OKKY(피드 없음), 디
 - 카카오 refresh token 유효 60일, 루틴이 3일마다 갱신·회전하므로 정상 운영 중엔 만료 없음.
   장기 중단 후 `invalid_grant` 에러가 로그에 보이면 `py -3 kakao_auth.py` 재실행.
 - 시크릿은 전부 `.env` (커밋 금지). 진단은 `py -3 kakao_sender.py --check` (마스킹 출력).
+
+## for-marketing 허브 연동 (2026-08-10 추가)
+
+수집·요약이 끝나면 다이제스트를 for-marketing 허브로 push한다. 허브가 이를 IG 카드뉴스로
+만들어 official_aiwebbuilder 계정에 발행한다(계약: for-marketing `docs/contracts/t9-integration.md` §6).
+
+- **fail-soft다.** `HUB_BASE_URL`/`HUB_INGEST_SECRET`이 없거나 허브가 죽어 있으면 push만
+  건너뛰고 카카오 발송은 그대로 진행된다. 이 루틴의 본래 목적은 카카오톡 다이제스트다.
+- 같은 회차(`digest_id` = 수집 창 종료일 KST)를 재전송해도 허브는 행을 늘리지 않는다.
+  단 이미 카드가 생성된 회차는 갱신하지 않고 `updated: false`를 돌려준다.
+- 수집 실패한 커뮤니티는 제외하고 보낸다. 요약 실패 글(`summary=None`)은 그대로 보내며,
+  버릴지는 허브의 카드 생성 단계가 정한다 — 수집기가 편집 정책까지 알 필요는 없다.
