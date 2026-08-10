@@ -20,7 +20,6 @@ main.py — 커뮤니티 인기 글 수집·요약·PDF·게시 파이프라인 
   0 — 성공. 일부 커뮤니티 수집 실패/글 요약 실패는 PDF·보고문에 명시되며 0으로 취급.
   1 — 카카오 전송 자체가 실패한 경우(--dry-run에서는 전송을 하지 않으므로 발생하지 않음).
 """
-
 from __future__ import annotations
 
 import argparse
@@ -73,8 +72,7 @@ def _setup_logging() -> None:
 
     file_handler = logging.handlers.RotatingFileHandler(
         str(Path(LOG_DIR) / LOG_FILE),
-        maxBytes=LOG_MAX_BYTES,
-        backupCount=LOG_BACKUP_COUNT,
+        maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT,
         encoding="utf-8",
     )
     file_handler.setFormatter(fmt)
@@ -124,24 +122,18 @@ def _fit_highlight(highlight: dict, budget: int) -> str:
     reason = " ".join((highlight.get("reason") or "").split())
     base = star + title
     if len(base) >= budget:
-        return base[: budget - 1] + "…"
+        return base[:budget - 1] + "…"
     sep = " — "
     room = budget - len(base) - len(sep)
     if reason and room > 8:
-        r = reason if len(reason) <= room else reason[: room - 1] + "…"
+        r = reason if len(reason) <= room else reason[:room - 1] + "…"
         return base + sep + r
     return base
 
 
-def _build_kakao_text(
-    window_start: datetime,
-    window_end: datetime,
-    results: list,
-    highlight,
-    pdf_path: Path,
-    link: Optional[str],
-    publish_message: str,
-) -> str:
+def _build_kakao_text(window_start: datetime, window_end: datetime, results: list,
+                      highlight, pdf_path: Path, link: Optional[str],
+                      publish_message: str) -> str:
     """카카오 전송용 짧은 메시지(헤더+하이라이트+PDF 링크)를 200자 이내 한 통으로 조립한다.
 
     헤더·링크를 먼저 확보하고 남는 예산에 하이라이트를 축약해 넣으므로, kakao_sender의
@@ -167,21 +159,13 @@ def _build_kakao_text(
 
     # 고정부(헤더+링크)를 먼저 두고, 남는 예산으로 하이라이트를 축약한다.
     fixed_len = len("\n".join(header + [link_line]))
-    hl = (
-        _fit_highlight(highlight, TEXT_TEMPLATE_MAX - fixed_len - 1)
-        if highlight
-        else ""
-    )
+    hl = _fit_highlight(highlight, TEXT_TEMPLATE_MAX - fixed_len - 1) if highlight else ""
     lines = header + ([hl] if hl else []) + [link_line]
     return "\n".join(lines)
 
 
-def run(
-    dry_run: bool,
-    legacy_text: bool,
-    env_path: str = DEFAULT_ENV_PATH,
-    communities_path: str = COMMUNITIES_PATH,
-) -> int:
+def run(dry_run: bool, legacy_text: bool, env_path: str = DEFAULT_ENV_PATH,
+        communities_path: str = COMMUNITIES_PATH) -> int:
     window_end = datetime.now(timezone.utc)
     window_start = window_end - timedelta(hours=collect.WINDOW_HOURS)
 
@@ -217,9 +201,7 @@ def run(
     if dry_run:
         print(f"[dry-run] PDF 생성 완료: {pdf_path}")
         if highlight:
-            print(
-                f"[dry-run] 하이라이트: {highlight['translated_title']} — {highlight['reason']}"
-            )
+            print(f"[dry-run] 하이라이트: {highlight['translated_title']} — {highlight['reason']}")
         else:
             print("[dry-run] 하이라이트 없음(요약 성공한 글 없음)")
         logger.info("dry-run 모드: git 게시·카카오 전송 생략")
@@ -228,9 +210,7 @@ def run(
     # for-marketing 허브 push — IG 카드뉴스 원재료(허브 계약 t9-integration.md §6).
     # fail-soft라 허브가 죽어 있어도 아래 Drive·git·카카오 경로는 그대로 진행된다.
     # 이 루틴의 본래 목적은 카카오톡 다이제스트이고, 허브 연동은 부가 경로다.
-    hub_result = hub_sender.push_digest(
-        results, window_start, window_end, env_path=env_path
-    )
+    hub_result = hub_sender.push_digest(results, window_start, window_end, env_path=env_path)
     logger.info("허브 push: %s", hub_result["message"])
 
     # Drive 공개 업로드(카카오 링크용). 실패해도 예외 없이 link=None을 반환하므로
@@ -239,30 +219,17 @@ def run(
     if drive_result.get("link"):
         logger.info("Drive 공개 업로드 완료 — 카카오 링크로 사용")
     else:
-        logger.warning(
-            "Drive 링크 미사용(%s) — GitHub 링크로 폴백", drive_result.get("message")
-        )
+        logger.warning("Drive 링크 미사용(%s) — GitHub 링크로 폴백", drive_result.get("message"))
 
     # git 아카이브: 링크 목적이 아니라 reports/ 이력 보존 목적으로 유지한다.
     publish_result = publish.publish_pdf(pdf_path)
-    logger.info(
-        "게시 결과: %s (committed=%s pushed=%s)",
-        publish_result["message"],
-        publish_result["committed"],
-        publish_result["pushed"],
-    )
+    logger.info("게시 결과: %s (committed=%s pushed=%s)",
+               publish_result["message"], publish_result["committed"], publish_result["pushed"])
 
     # 링크 우선순위: Drive 공개 링크 > GitHub blob 링크 > (둘 다 실패 시) 로컬 경로 문구.
     link = drive_result.get("link") or publish_result.get("link")
-    kakao_text = _build_kakao_text(
-        window_start,
-        window_end,
-        results,
-        highlight,
-        pdf_path,
-        link,
-        publish_result.get("message", ""),
-    )
+    kakao_text = _build_kakao_text(window_start, window_end, results, highlight,
+                                   pdf_path, link, publish_result.get("message", ""))
     return _deliver_text(kakao_text, dry_run=False, env_path=env_path)
 
 
@@ -291,25 +258,14 @@ def _deliver_text(text: str, dry_run: bool, env_path: str) -> int:
 
 
 def _main(argv=None) -> int:
-    parser = argparse.ArgumentParser(
-        description="커뮤니티 인기 글 수집·요약·PDF·게시 파이프라인"
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="수집·요약·PDF 생성까지 실행하되 push·카카오 전송은 생략",
-    )
-    parser.add_argument(
-        "--legacy-text",
-        action="store_true",
-        help="개편 이전의 조각 텍스트 나열 전송 경로(호환용, PDF·게시 없음)",
-    )
+    parser = argparse.ArgumentParser(description="커뮤니티 인기 글 수집·요약·PDF·게시 파이프라인")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="수집·요약·PDF 생성까지 실행하되 push·카카오 전송은 생략")
+    parser.add_argument("--legacy-text", action="store_true",
+                        help="개편 이전의 조각 텍스트 나열 전송 경로(호환용, PDF·게시 없음)")
     parser.add_argument("--env", default=DEFAULT_ENV_PATH, help=".env 경로 (기본 .env)")
-    parser.add_argument(
-        "--communities",
-        default=COMMUNITIES_PATH,
-        help="커뮤니티 설정 JSON 경로 (기본 communities.json)",
-    )
+    parser.add_argument("--communities", default=COMMUNITIES_PATH,
+                        help="커뮤니티 설정 JSON 경로 (기본 communities.json)")
     args = parser.parse_args(argv)
 
     # Windows 콘솔(cmd.exe 기본 코드페이지 CP949) 대응: 가능하면 stdout/stderr을
@@ -323,12 +279,8 @@ def _main(argv=None) -> int:
 
     _setup_logging()
     try:
-        return run(
-            dry_run=args.dry_run,
-            legacy_text=args.legacy_text,
-            env_path=args.env,
-            communities_path=args.communities,
-        )
+        return run(dry_run=args.dry_run, legacy_text=args.legacy_text, env_path=args.env,
+                   communities_path=args.communities)
     except Exception as e:  # noqa: BLE001 - CLI 최상위 경계
         logger.exception("예기치 못한 오류: %s", e)
         return 1

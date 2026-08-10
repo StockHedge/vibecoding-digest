@@ -47,7 +47,7 @@ X(무료 API 없음), Discord(ToS 스크래핑 금지), OKKY(피드 없음), 디
   장기 중단 후 `invalid_grant` 에러가 로그에 보이면 `py -3 kakao_auth.py` 재실행.
 - 시크릿은 전부 `.env` (커밋 금지). 진단은 `py -3 kakao_sender.py --check` (마스킹 출력).
 
-## for-marketing 허브 연동 (2026-08-10 추가)
+## for-marketing 허브 연동 (2026-08-11 추가)
 
 수집·요약이 끝나면 다이제스트를 for-marketing 허브로 push한다. 허브가 이를 IG 카드뉴스로
 만들어 official_aiwebbuilder 계정에 발행한다(계약: for-marketing `docs/contracts/t9-integration.md` §6).
