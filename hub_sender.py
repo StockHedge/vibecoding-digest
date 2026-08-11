@@ -65,8 +65,21 @@ def build_payload(results: list, window_start: datetime, window_end: datetime) -
         ]
         if not posts:
             continue
+        # 키가 바뀌면 조용히 빈 출처로 나가는 대신 로그로 드러낸다.
+        if not (r.get("community_name") or r.get("community_id")):
+            logger.warning(
+                "커뮤니티 식별자를 찾을 수 없다 — collect 결과 구조 변경 의심: keys=%s",
+                sorted(r)[:6],
+            )
+        # collect_community()가 돌려주는 키는 community_id / community_name 이다.
+        # id/name 으로 읽으면 조용히 빈 문자열이 되어 허브 카드의 출처 표기가 사라진다
+        # (2026-08-11 실제 발생 — 캡션에 `· []` 로 찍혔다).
         communities.append(
-            {"id": r.get("id", ""), "name": r.get("name", ""), "posts": posts}
+            {
+                "id": r.get("community_id") or "",
+                "name": r.get("community_name") or "",
+                "posts": posts,
+            }
         )
 
     return {
